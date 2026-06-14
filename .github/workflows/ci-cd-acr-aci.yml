@@ -42,7 +42,6 @@ jobs:
 
       - name: Build Docker image
         run: |
-          # Compilación local limpia para evitar conflictos de nomenclatura
           docker build -t flask-local:latest .
 
       - name: Run tests inside the Docker image
@@ -64,7 +63,6 @@ jobs:
           RAW_LOGIN_SERVER: ${{ secrets.REGISTRY_LOGIN_SERVER }}
           RAW_IMAGE_NAME: ${{ env.IMAGE_NAME }}
         run: |
-          # Sanitización del servidor de login quitando protocolos y fijando minúsculas
           CLEAN_SERVER=$(echo "$RAW_LOGIN_SERVER" | sed -e 's/https:\/\///g' -e 's/http:\/\///g' | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
           IMAGE_LOWER=$(echo "$RAW_IMAGE_NAME" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
 
@@ -77,69 +75,67 @@ jobs:
           docker push $IMAGE_SHA
           docker push $IMAGE_LATEST
 
-          # Almacenamos el tag limpio en el entorno global de la ejecución
           echo "IMAGE_FINAL_TAG=$IMAGE_SHA" >> $GITHUB_ENV
 
       # =========================================================================
-      # DESPLIEGUE SEGURO MEDIANTE ARM TEMPLATE (CON SUSCRIPTION ID)
+      # DESPLIEGUE DIRECTO POR API REST (BYPASS ABSOLUTO DE AZ CLI / LOGIN)
       # =========================================================================
-      - name: Deploy to Azure Container Instances via ARM Template
-        uses: azure/arm-deploy@v2
-        with:
-          # Pasamos el ID de la suscripción para que localice correctamente el Resource Group
-          subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          resourceGroupName: ${{ secrets.RESOURCE_GROUP }}
-          template: |
-            {
-              "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-              "contentVersion": "1.0.0.0",
-              "resources": [
+      - name: Deploy to Azure Container Instances via API REST
+        run: |
+          # 1. Creamos el cuerpo JSON de la petición para Azure
+          cat <<EOF > deployment.json
+          {
+            "location": "${{ env.LOCATION }}",
+            "properties": {
+              "containers": [
                 {
-                  "type": "Microsoft.ContainerInstance/containerGroups",
-                  "apiVersion": "2023-05-01",
                   "name": "${{ env.CONTAINER_NAME }}",
-                  "location": "${{ env.LOCATION }}",
                   "properties": {
-                    "containers": [
+                    "image": "${{ env.IMAGE_FINAL_TAG }}",
+                    "ports": [
                       {
-                        "name": "${{ env.CONTAINER_NAME }}",
-                        "properties": {
-                          "image": "${{ env.IMAGE_FINAL_TAG }}",
-                          "ports": [
-                            {
-                              "port": ${{ env.PORT }},
-                              "protocol": "TCP"
-                            }
-                          ],
-                          "resources": {
-                            "requests": {
-                              "cpu": 1,
-                              "memoryInGB": 1
-                            }
-                          }
-                        }
+                        "port": ${{ env.PORT }},
+                        "protocol": "TCP"
                       }
                     ],
-                    "imageRegistryCredentials": [
-                      {
-                        "server": "${{ secrets.REGISTRY_LOGIN_SERVER }}",
-                        "username": "${{ secrets.REGISTRY_USERNAME }}",
-                        "password": "${{ secrets.REGISTRY_PASSWORD }}"
+                    "resources": {
+                      "requests": {
+                        "cpu": 1.0,
+                        "memoryInGB": 1.0
                       }
-                    ],
-                    "osType": "Linux",
-                    "restartPolicy": "Always",
-                    "ipAddress": {
-                      "type": "Public",
-                      "ports": [
-                        {
-                          "port": ${{ env.PORT }},
-                          "protocol": "TCP"
-                        }
-                      ],
-                      "dnsNameLabel": "${{ secrets.DNS_NAME_LABEL }}"
                     }
                   }
                 }
-              ]
+              ],
+              "imageRegistryCredentials": [
+                {
+                  "server": "${{ secrets.REGISTRY_LOGIN_SERVER }}",
+                  "username": "${{ secrets.REGISTRY_USERNAME }}",
+                  "password": "${{ secrets.REGISTRY_PASSWORD }}"
+                }
+              ],
+              "osType": "Linux",
+              "restartPolicy": "Always",
+              "ipAddress": {
+                "type": "Public",
+                "ports": [
+                  {
+                    "port": ${{ env.PORT }},
+                    "protocol": "TCP"
+                  }
+                ],
+                "dnsNameLabel": "${{ secrets.DNS_NAME_LABEL }}"
+              }
             }
+          }
+          EOF
+
+          # 2. Enviamos la orden directa a la API REST de Azure usando curl
+          echo "Iniciando despliegue directo en Azure..."
+          curl --fail -X PUT \
+            -H "Authorization: Bearer ${{ secrets.AZURE_BEARER_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d @deployment.json \
+            "https://management.azure.com/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP }}/providers/Microsoft.ContainerInstance/containerGroups/${{ env.CONTAINER_NAME }}?api-version=2023-05-01"
+          
+          echo "¡Despliegue solicitado con éxito!"
