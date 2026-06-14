@@ -42,7 +42,6 @@ jobs:
 
       - name: Build Docker image
         run: |
-          # Compilación local limpia para evitar conflictos de nomenclatura
           docker build -t flask-local:latest .
 
       - name: Run tests inside the Docker image
@@ -64,7 +63,6 @@ jobs:
           RAW_LOGIN_SERVER: ${{ secrets.REGISTRY_LOGIN_SERVER }}
           RAW_IMAGE_NAME: ${{ env.IMAGE_NAME }}
         run: |
-          # Sanitización del servidor de login quitando protocolos y fijando minúsculas
           CLEAN_SERVER=$(echo "$RAW_LOGIN_SERVER" | sed -e 's/https:\/\///g' -e 's/http:\/\///g' | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
           IMAGE_LOWER=$(echo "$RAW_IMAGE_NAME" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
 
@@ -77,15 +75,15 @@ jobs:
           docker push $IMAGE_SHA
           docker push $IMAGE_LATEST
 
-          # Almacenamos los tags limpios en el entorno global de la ejecución
           echo "IMAGE_FINAL_TAG=$IMAGE_SHA" >> $GITHUB_ENV
 
       # =========================================================================
-      # DESPLIEGUE DIRECTO MEDIANTE AZURE CLI UTILIZANDO CREDENCIALES DEL ACR
-      # Autentica la descarga del contenedor usando las claves explícitas
+      # DESPLIEGUE UTILIZANDO CONEXIÓN DIRECTA POR CLAVES DE ADMINISTRADOR DEL ACR
+      # Autenticamos la Azure CLI usando los datos del propio registro
       # =========================================================================
-      - name: Deploy to Azure Container Instances via CLI
+      - name: Deploy to Azure Container Instances
         run: |
+          # Intentamos el bypass inyectando directamente las credenciales del registro para la sesión de creación
           az container create \
             --resource-group "${{ secrets.RESOURCE_GROUP }}" \
             --name "${{ env.CONTAINER_NAME }}" \
@@ -100,4 +98,5 @@ jobs:
             --os-type Linux \
             --cpu 1 \
             --memory 1 \
-            --restart-policy Always
+            --restart-policy Always \
+            --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
