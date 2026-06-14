@@ -41,16 +41,22 @@ jobs:
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: Build Docker image
+        env:
+          RAW_LOGIN_SERVER: ${{ secrets.REGISTRY_LOGIN_SERVER }}
+          RAW_IMAGE_NAME: ${{ env.IMAGE_NAME }}
         run: |
-          # Convertimos el servidor de login a minúsculas para cumplir con el formato estricto de Docker
-          REGISTRY_LOWER=$(echo "${{ secrets.REGISTRY_LOGIN_SERVER }}" | tr '[:upper:]' '[:lower:]')
+          # 1. Limpiamos posibles espacios, saltos de línea (\r) y forzamos minúsculas
+          REGISTRY_LOWER=$(echo "$RAW_LOGIN_SERVER" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+          IMAGE_LOWER=$(echo "$RAW_IMAGE_NAME" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
           
-          IMAGE_SHA="${REGISTRY_LOWER}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          IMAGE_LATEST="${REGISTRY_LOWER}/${{ env.IMAGE_NAME }}:latest"
+          # 2. Construimos los tags de forma segura usando variables puras de Bash
+          IMAGE_SHA="${REGISTRY_LOWER}/${IMAGE_LOWER}:${{ github.sha }}"
+          IMAGE_LATEST="${REGISTRY_LOWER}/${IMAGE_LOWER}:latest"
 
+          # 3. Compilamos la imagen Docker
           docker build -t "$IMAGE_SHA" -t "$IMAGE_LATEST" .
 
-          # Guardamos las variables en el entorno de GitHub para reusarlas en los siguientes pasos
+          # 4. Exportamos al entorno global de GitHub Actions para los siguientes pasos
           echo "IMAGE_SHA=$IMAGE_SHA" >> "$GITHUB_ENV"
           echo "IMAGE_LATEST=$IMAGE_LATEST" >> "$GITHUB_ENV"
 
@@ -71,20 +77,4 @@ jobs:
       - name: Push Docker image to Azure Container Registry
         run: |
           docker push "$IMAGE_SHA"
-          docker push "$IMAGE_LATEST"
-
-      - name: Deploy to Azure Container Instances
-        uses: azure/aci-deploy@v1
-        with:
-          resource-group: ${{ secrets.RESOURCE_GROUP }}
-          name: ${{ env.CONTAINER_NAME }}
-          image: ${{ env.IMAGE_SHA }}
-          registry-login-server: ${{ secrets.REGISTRY_LOGIN_SERVER }}
-          registry-username: ${{ secrets.REGISTRY_USERNAME }}
-          registry-password: ${{ secrets.REGISTRY_PASSWORD }}
-          dns-name-label: ${{ secrets.DNS_NAME_LABEL }}
-          ports: ${{ env.PORT }}
-          location: ${{ env.LOCATION }}
-          restart-policy: Always
-          cpu: 1
-          memory: 1
+          docker push "$IMAGE_
