@@ -42,11 +42,15 @@ jobs:
 
       - name: Build Docker image
         run: |
-          IMAGE_SHA="${{ secrets.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          IMAGE_LATEST="${{ secrets.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest"
+          # Convertimos el servidor de login a minúsculas para cumplir con el formato estricto de Docker
+          REGISTRY_LOWER=$(echo "${{ secrets.REGISTRY_LOGIN_SERVER }}" | tr '[:upper:]' '[:lower:]')
+          
+          IMAGE_SHA="${REGISTRY_LOWER}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          IMAGE_LATEST="${REGISTRY_LOWER}/${{ env.IMAGE_NAME }}:latest"
 
           docker build -t "$IMAGE_SHA" -t "$IMAGE_LATEST" .
 
+          # Guardamos las variables en el entorno de GitHub para reusarlas en los siguientes pasos
           echo "IMAGE_SHA=$IMAGE_SHA" >> "$GITHUB_ENV"
           echo "IMAGE_LATEST=$IMAGE_LATEST" >> "$GITHUB_ENV"
 
@@ -74,7 +78,7 @@ jobs:
         with:
           resource-group: ${{ secrets.RESOURCE_GROUP }}
           name: ${{ env.CONTAINER_NAME }}
-          image: ${{ secrets.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          image: ${{ env.IMAGE_SHA }}
           registry-login-server: ${{ secrets.REGISTRY_LOGIN_SERVER }}
           registry-username: ${{ secrets.REGISTRY_USERNAME }}
           registry-password: ${{ secrets.REGISTRY_PASSWORD }}
@@ -84,4 +88,3 @@ jobs:
           restart-policy: Always
           cpu: 1
           memory: 1
-  
