@@ -41,32 +41,17 @@ jobs:
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: Build Docker image
-        env:
-          RAW_LOGIN_SERVER: ${{ secrets.REGISTRY_LOGIN_SERVER }}
-          RAW_IMAGE_NAME: ${{ env.IMAGE_NAME }}
         run: |
-          # 1. Limpiamos posibles espacios, saltos de línea (\r) y forzamos minúsculas
-          REGISTRY_LOWER=$(echo "$RAW_LOGIN_SERVER" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
-          IMAGE_LOWER=$(echo "$RAW_IMAGE_NAME" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
-          
-          # 2. Construimos los tags de forma segura usando variables puras de Bash
-          IMAGE_SHA="${REGISTRY_LOWER}/${IMAGE_LOWER}:${{ github.sha }}"
-          IMAGE_LATEST="${REGISTRY_LOWER}/${IMAGE_LOWER}:latest"
-
-          # 3. Compilamos la imagen Docker
-          docker build -t "$IMAGE_SHA" -t "$IMAGE_LATEST" .
-
-          # 4. Exportamos al entorno global de GitHub Actions para los siguientes pasos
-          echo "IMAGE_SHA=$IMAGE_SHA" >> "$GITHUB_ENV"
-          echo "IMAGE_LATEST=$IMAGE_LATEST" >> "$GITHUB_ENV"
+          # Forzamos nombres locales simples para evitar problemas de formato en el build
+          docker build -t flask-local:latest .
 
       - name: Run tests inside the Docker image
         run: |
-          docker run --rm "$IMAGE_SHA" python -m pytest -q
+          docker run --rm flask-local:latest python -m pytest -q
 
       - name: Run container smoke test
         run: |
-          docker run -d --name flask-test -p 5000:5000 "$IMAGE_SHA"
+          docker run -d --name flask-test -p 5000:5000 flask-local:latest
           sleep 5
           curl --fail http://localhost:5000/
           curl --fail http://localhost:5000/health
@@ -75,6 +60,40 @@ jobs:
           docker rm flask-test
 
       - name: Push Docker image to Azure Container Registry
+        env:
+          RAW_LOGIN_SERVER: ${{ secrets.REGISTRY_LOGIN_SERVER }}
+          RAW_IMAGE_NAME: ${{ env.IMAGE_NAME }}
         run: |
-          docker push "$IMAGE_SHA"
-          docker push "$IMAGE_
+          # Limpiamos el dominio de posibles protocolos (http/https) y mayúsculas
+          CLEAN_SERVER=$(echo "$RAW_LOGIN_SERVER" | sed -e 's/https:\/\///g' -e 's/http:\/\///g' | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+          IMAGE_LOWER=$(echo "$RAW_IMAGE_NAME" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+          IMAGE_SHA="${CLEAN_SERVER}/${IMAGE_LOWER}:${{ github.sha }}"
+          IMAGE_LATEST="${CLEAN_SERVER}/${IMAGE_LOWER}:latest"
+
+          # Etiquetamos la imagen local con los tags de Azure
+          docker tag flask-local:latest $IMAGE_SHA
+          docker tag flask-local:latest $IMAGE_LATEST
+
+          # Subimos al registro de Azure
+          docker push $IMAGE_SHA
+          docker push $IMAGE_LATEST
+
+          # Guardamos en GITHUB_ENV sin usar comisiones dobles conflictivas
+          echo "IMAGE_FINAL_TAG=$IMAGE_SHA" >> $GITHUB_ENV
+
+      - name: Deploy to Azure Container Instances
+        uses: azure/aci-deploy@v1
+        with:
+          resource-group: ${{ secrets.RESOURCE_GROUP }}
+          name: ${{ env.CONTAINER_NAME }}
+          image: ${{ env.IMAGE_FINAL_TAG }}
+          registry-login-server: ${{ secrets.REGISTRY_LOGIN_SERVER }}
+          registry-username: ${{ secrets.REGISTRY_USERNAME }}
+          registry-password: ${{ secrets.REGISTRY_PASSWORD }}
+          dns-name-label: ${{ secrets.DNS_NAME_LABEL }}
+          ports: ${{ env.PORT }}
+          location: ${{ env.LOCATION }}
+          restart-policy: Always
+          cpu: 1
+          memory: 1
