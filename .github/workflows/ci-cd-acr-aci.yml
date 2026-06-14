@@ -42,7 +42,7 @@ jobs:
 
       - name: Build Docker image
         run: |
-          # Forzamos nombres locales simples para evitar problemas de formato en el build
+          # Compilación local limpia para evitar conflictos de nomenclatura
           docker build -t flask-local:latest .
 
       - name: Run tests inside the Docker image
@@ -64,36 +64,40 @@ jobs:
           RAW_LOGIN_SERVER: ${{ secrets.REGISTRY_LOGIN_SERVER }}
           RAW_IMAGE_NAME: ${{ env.IMAGE_NAME }}
         run: |
-          # Limpiamos el dominio de posibles protocolos (http/https) y mayúsculas
+          # Sanitización del servidor de login quitando protocolos y fijando minúsculas
           CLEAN_SERVER=$(echo "$RAW_LOGIN_SERVER" | sed -e 's/https:\/\///g' -e 's/http:\/\///g' | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
           IMAGE_LOWER=$(echo "$RAW_IMAGE_NAME" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
 
           IMAGE_SHA="${CLEAN_SERVER}/${IMAGE_LOWER}:${{ github.sha }}"
           IMAGE_LATEST="${CLEAN_SERVER}/${IMAGE_LOWER}:latest"
 
-          # Etiquetamos la imagen local con los tags de Azure
           docker tag flask-local:latest $IMAGE_SHA
           docker tag flask-local:latest $IMAGE_LATEST
 
-          # Subimos al registro de Azure
           docker push $IMAGE_SHA
           docker push $IMAGE_LATEST
 
-          # Guardamos en GITHUB_ENV sin usar comisiones dobles conflictivas
+          # Almacenamos los tags limpios en el entorno global de la ejecución
           echo "IMAGE_FINAL_TAG=$IMAGE_SHA" >> $GITHUB_ENV
 
-      - name: Deploy to Azure Container Instances
-        uses: azure/aci-deploy@v1
-        with:
-          resource-group: ${{ secrets.RESOURCE_GROUP }}
-          name: ${{ env.CONTAINER_NAME }}
-          image: ${{ env.IMAGE_FINAL_TAG }}
-          registry-login-server: ${{ secrets.REGISTRY_LOGIN_SERVER }}
-          registry-username: ${{ secrets.REGISTRY_USERNAME }}
-          registry-password: ${{ secrets.REGISTRY_PASSWORD }}
-          dns-name-label: ${{ secrets.DNS_NAME_LABEL }}
-          ports: ${{ env.PORT }}
-          location: ${{ env.LOCATION }}
-          restart-policy: Always
-          cpu: 1
-          memory: 1
+      # =========================================================================
+      # DESPLIEGUE DIRECTO MEDIANTE AZURE CLI UTILIZANDO CREDENCIALES DEL ACR
+      # Autentica la descarga del contenedor usando las claves explícitas
+      # =========================================================================
+      - name: Deploy to Azure Container Instances via CLI
+        run: |
+          az container create \
+            --resource-group "${{ secrets.RESOURCE_GROUP }}" \
+            --name "${{ env.CONTAINER_NAME }}" \
+            --image "${{ env.IMAGE_FINAL_TAG }}" \
+            --registry-login-server "${{ secrets.REGISTRY_LOGIN_SERVER }}" \
+            --registry-username "${{ secrets.REGISTRY_USERNAME }}" \
+            --registry-password "${{ secrets.REGISTRY_PASSWORD }}" \
+            --dns-name-label "${{ secrets.DNS_NAME_LABEL }}" \
+            --ports "${{ env.PORT }}" \
+            --location "${{ env.LOCATION }}" \
+            --ip-address Public \
+            --os-type Linux \
+            --cpu 1 \
+            --memory 1 \
+            --restart-policy Always
